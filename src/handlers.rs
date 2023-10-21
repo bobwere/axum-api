@@ -1,6 +1,9 @@
-use axum::{extract, http};
+use axum::{
+    extract::{self, Path},
+    http,
+};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{FromRow, PgPool};
 
 #[derive(Debug, Deserialize)]
 pub struct CreateQuote {
@@ -8,7 +11,13 @@ pub struct CreateQuote {
     quote: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Deserialize)]
+pub struct UpdateQuote {
+    book: Option<String>,
+    quote: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, FromRow)]
 pub struct Quote {
     id: uuid::Uuid,
     book: String,
@@ -56,6 +65,51 @@ pub async fn create_quote(
 
     match res {
         Ok(_) => Ok((http::StatusCode::CREATED, axum::Json(quote))),
+        Err(_) => Err(http::StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+pub async fn update_quote(
+    extract::State(pool): extract::State<PgPool>,
+    Path(id): Path<uuid::Uuid>,
+    axum::Json(payload): axum::Json<UpdateQuote>,
+) -> Result<(http::StatusCode, axum::Json<Quote>), http::StatusCode> {
+    let now = chrono::Utc::now();
+
+    let res = sqlx::query_as::<_,Quote>(
+        r#"
+          UPDATE quotes 
+          SET book = COALESCE($2, book), quote = COALESCE($3, quote), updated_at = COALESCE($4, updated_at)
+          WHERE id = $1
+          RETURNING *
+        "#,
+    )
+    .bind(id)
+    .bind(&payload.book )
+    .bind(&payload.quote)
+    .bind(now)
+    .fetch_one(&pool)
+    .await;
+
+    match res {
+        Ok(quote) => Ok((http::StatusCode::CREATED, axum::Json(quote))),
+        Err(_) => Err(http::StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+pub async fn read_quotes(
+    extract::State(pool): extract::State<PgPool>,
+) -> Result<axum::Json<Vec<Quote>>, http::StatusCode> {
+    let res = sqlx::query_as::<_, Quote>(
+        r#"
+          SELECT * FROM quotes
+        "#,
+    )
+    .fetch_all(&pool)
+    .await;
+
+    match res {
+        Ok(data) => Ok(axum::Json(data)),
         Err(_) => Err(http::StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
